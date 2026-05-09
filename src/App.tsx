@@ -4,21 +4,15 @@ import type { AdviceResultFull } from './api';
 import { defaultInput } from './types';
 import { tossLogin, saveAuth, loadAuth, clearAuth, API_URL, type User } from './auth';
 import { fetchAdvice, fallbackAdvice } from './api';
-import { loadPlan, canUse, incrementCount, remainingFree, purchasePremium } from './plan';
+import { loadPlan, canUse, incrementCount, remainingFree, isPremium, purchasePlan, PLANS } from './plan';
 import { analyzePattern } from './pattern';
 import './App.css';
 
-// ──────────────────────────────────────────────
-// 유틸
-// ──────────────────────────────────────────────
 function today() {
   const d = new Date();
   return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}`;
 }
 
-// ──────────────────────────────────────────────
-// App
-// ──────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState<Screen>('onboard');
   const [auth, setAuth] = useState<{ token: string; user: User } | null>(null);
@@ -35,36 +29,21 @@ export default function App() {
   const [regEmail, setRegEmail] = useState('');
   const [regPw, setRegPw] = useState('');
   const [errMsg, setErrMsg] = useState('');
+  const [selectedPlan, setSelectedPlan] = useState<string>('month');
 
-  // 초기 인증 복원
   useEffect(() => {
     const saved = loadAuth();
-    if (saved) {
-      setAuth(saved);
-      go('birth');
-    }
+    if (saved) { setAuth(saved); go('occupation'); }
   }, []);
 
-  // ── 화면 전환 ──
-  function go(next: Screen) {
-    setScreen(next);
-  }
-
-  function goHome() {
-    go('birth');
-  }
+  function go(next: Screen) { setScreen(next); }
+  function goHome() { go('occupation'); }
 
   // ── 인증 ──
   async function handleTossLogin() {
     const res = await tossLogin();
-    if (res) {
-      setAuth(res);
-      showToast('로그인 완료!');
-      go('birth');
-    } else {
-      // 브라우저 환경 — 이메일 로그인으로 안내
-      setErrMsg('앱인토스 샌드박스에서 실행해주세요. 이메일로 로그인할 수 있어요.');
-    }
+    if (res) { setAuth(res); showToast('로그인 완료!'); go('occupation'); }
+    else { setErrMsg('앱인토스 샌드박스에서 실행해주세요. 이메일로 로그인할 수 있어요.'); }
   }
 
   async function handleEmailLogin() {
@@ -78,10 +57,10 @@ export default function App() {
       if (!r.ok) { setErrMsg(d.error); return; }
       saveAuth(d.token, d.user);
       setAuth(d);
-      go('birth');
+      go('occupation');
     } catch {
       setErrMsg('서버에 연결할 수 없어요. 체험 모드로 계속해요.');
-      go('birth');
+      go('occupation');
     }
   }
 
@@ -97,35 +76,23 @@ export default function App() {
       if (!r.ok) { setErrMsg(d.error); return; }
       saveAuth(d.token, d.user);
       setAuth(d);
-      go('birth');
-    } catch {
-      setErrMsg('서버에 연결할 수 없어요');
-    }
+      go('occupation');
+    } catch { setErrMsg('서버에 연결할 수 없어요'); }
   }
 
-  function handleLogout() {
-    clearAuth();
-    setAuth(null);
-    go('onboard');
-  }
+  function handleLogout() { clearAuth(); setAuth(null); go('onboard'); }
 
-  // ── 입력 ──
   const upd = useCallback((key: keyof InputState, val: string) => {
     setS(p => ({ ...p, [key]: val }));
   }, []);
 
   // ── AI 분석 ──
   async function startAnalysis() {
-    // 무료 플랜 사용 한도 체크
     const latest = loadPlan();
     setPlanInfo(latest);
-    if (!canUse(latest)) {
-      go('paywall');
-      return;
-    }
+    if (!canUse(latest)) { go('paywall'); return; }
     incrementCount();
     setPlanInfo(loadPlan());
-
     go('loading');
     try {
       const r = await fetchAdvice(s);
@@ -139,22 +106,22 @@ export default function App() {
 
   async function handlePurchase() {
     if (!auth?.token) { go('login'); return; }
-    const ok = await purchasePremium(auth.token);
+    const planId = selectedPlan as any;
+    const ok = await purchasePlan(auth.token, planId);
     if (ok) {
       setPlanInfo(loadPlan());
-      showToast('프리미엄 구독 시작! 무제한으로 사용해요');
-      go('birth');
+      const plan = PLANS.find(p => p.id === planId);
+      showToast(`${plan?.name} 시작! 이순간을 마음껏 써봐요 ✨`);
+      go('occupation');
     } else {
-      showToast('결제에 실패했어요. 다시 시도해주세요.');
+      showToast('결제에 실패했어. 다시 시도해줘.');
     }
   }
 
   async function loadPatternData() {
     if (!auth?.token) return;
     try {
-      const r = await fetch(`${API_URL}/history`, {
-        headers: { Authorization: `Bearer ${auth.token}` }
-      });
+      const r = await fetch(`${API_URL}/history`, { headers: { Authorization: `Bearer ${auth.token}` } });
       const list = await r.json();
       setPatternData(analyzePattern(list));
     } catch { setPatternData(null); }
@@ -167,17 +134,12 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
         body: JSON.stringify({
-          place: s.place, person: s.person, purpose: s.purpose,
+          place: s.place, person: s.person, purpose: s.purpose, occupation: s.occupation,
           situation: r.situation, advice: r.advice,
           checkpoints: r.checkpoints, bans: r.bans, sajuProfile: r.saju,
         }),
       });
-      await fetch(`${API_URL}/user/saju`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
-        body: JSON.stringify({ year: s.year, month: s.month, day: s.day, hour: s.hour, gender: s.gender }),
-      });
-    } catch { /* 저장 실패는 조용히 */ }
+    } catch {}
   }
 
   async function loadHistory() {
@@ -205,48 +167,40 @@ export default function App() {
 
   function showToast(msg: string) {
     setToast(msg);
-    setTimeout(() => setToast(''), 1800);
+    setTimeout(() => setToast(''), 2000);
   }
 
-  async function copyResult() {
-    if (!result) return;
-    const text = `오늘의 나침반 (${today()})\n\n${result.situation}\n\n${result.advice}\n\n체크포인트\n${result.checkpoints.map(c => '• ' + c).join('\n')}\n\n오늘 하지 말 것\n${result.bans.map(b => '• ' + b).join('\n')}`;
-    await navigator.clipboard.writeText(text);
-    showToast('복사됐어요');
-  }
+  const premium = isPremium(planInfo.plan);
 
-  // ──────────────────────────────────────────────
-  // 렌더
-  // ──────────────────────────────────────────────
+  // ── 렌더 ──
   return (
     <div className="shell">
+
       {/* 온보딩 */}
       <div className={`screen ${screen === 'onboard' ? 'active' : ''}`}>
         <div className="hero">
           <div className="hero-icon">
             <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-              <circle cx="16" cy="16" r="12" stroke="rgba(255,255,255,.4)" strokeWidth="1.5"/>
-              <circle cx="16" cy="16" r="2.5" fill="rgba(255,255,255,.8)"/>
-              <path d="M16 7L18.2 13.8H13.8L16 7Z" fill="#93c5fd"/>
-              <path d="M16 25L13.8 18.2H18.2L16 25Z" fill="rgba(255,255,255,.3)"/>
-              <path d="M7 16L13.8 13.8V18.2L7 16Z" fill="rgba(255,255,255,.3)"/>
-              <path d="M25 16L18.2 18.2V13.8L25 16Z" fill="rgba(255,255,255,.3)"/>
+              <circle cx="16" cy="16" r="10" stroke="rgba(212,163,115,.5)" strokeWidth="1.5"/>
+              <circle cx="16" cy="16" r="2.5" fill="var(--gold)"/>
+              <path d="M16 8L18 13H14L16 8Z" fill="var(--gold)"/>
+              <path d="M16 24L14 19H18L16 24Z" fill="rgba(212,163,115,.3)"/>
+              <path d="M8 16L13 14V18L8 16Z" fill="rgba(212,163,115,.3)"/>
+              <path d="M24 16L19 18V14L24 16Z" fill="rgba(212,163,115,.3)"/>
             </svg>
           </div>
-          <h1 className="hero-title">오늘 하루<br/>덜 긴장하고 싶다면</h1>
-          <p className="hero-sub">사주와 오늘 상황을 함께 분석해<br/>아무도 못 해준 조언을 드릴게요</p>
+          <h1 className="hero-title">이 순간,<br/>어떻게 해야 할지<br/>알려줄게</h1>
+          <p className="hero-sub">사주 + 오늘 상황으로<br/>'가야 하나 말아야 하나' 판단해드려요</p>
         </div>
         <div className="feat-list">
           {[
-            { title: '사주로 내 성향 파악', desc: '생년월일로 대인관계 패턴 분석' },
-            { title: '오늘 상황 맞춤 전략', desc: '장소·사람·목적 입력하면 끝' },
-            { title: '조언 기록 저장', desc: '30일 패턴 분석 (로그인 필요)' },
-            { title: '하지 말 것 콕 집어 알림', desc: '내 사주 기준 역효과 나는 행동' },
+            { title: 'Go / No-Go 즉시 판정', desc: '사주 일진 기반 오늘 이 상황 분석', icon: '🔮' },
+            { title: '신분별 맞춤 전략', desc: '학생·직장인·자영업자별 다른 조언', icon: '🎯' },
+            { title: '골든타임 + 행운 아이템', desc: '오전/오후/저녁 최적 행동 전략', icon: '⏰' },
+            { title: '30일 패턴 분석', desc: '나만의 대인관계 인사이트', icon: '📊' },
           ].map((f, i) => (
             <div key={i} className="feat-row" style={{ animationDelay: `${i * 0.06}s` }}>
-              <div className="feat-ic">
-                <FeatIcon i={i} />
-              </div>
+              <div className="feat-ic"><span style={{ fontSize: 22 }}>{f.icon}</span></div>
               <div>
                 <div className="feat-title">{f.title}</div>
                 <div className="feat-desc">{f.desc}</div>
@@ -255,7 +209,8 @@ export default function App() {
           ))}
         </div>
         <div className="cta-wrap">
-          <button className="cta" onClick={() => go('login')}>시작하기</button>
+          <button className="cta" onClick={() => go('login')}>무료로 시작하기</button>
+          <button className="cta ghost" onClick={() => go('occupation')}>로그인 없이 체험</button>
         </div>
       </div>
 
@@ -263,18 +218,11 @@ export default function App() {
       <div className={`screen ${screen === 'login' ? 'active' : ''}`}>
         <div className="status-bar"><span className="clock"><Clock /></span></div>
         <div className="auth-top">
-          <div className="auth-logo">
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-              <circle cx="14" cy="14" r="10" stroke="rgba(255,255,255,.45)" strokeWidth="1.5"/>
-              <circle cx="14" cy="14" r="2.2" fill="rgba(255,255,255,.9)"/>
-              <path d="M14 7L15.8 12.2H12.2L14 7Z" fill="#93c5fd"/>
-            </svg>
-          </div>
-          <h2 className="auth-title">로그인</h2>
-          <p className="auth-sub">계정이 없으면 자동으로 만들어드려요</p>
+          <div className="auth-logo">✨</div>
+          <h2 className="auth-title">이순간</h2>
+          <p className="auth-sub">가입 즉시 3회 무료 체험!</p>
         </div>
         <div className="auth-body">
-          {/* 토스 로그인 버튼 — 앱인토스 SDK 연동 */}
           <button className="toss-login-btn" onClick={handleTossLogin}>
             <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
               <circle cx="11" cy="11" r="11" fill="#3182F6"/>
@@ -282,9 +230,7 @@ export default function App() {
             </svg>
             토스로 계속하기
           </button>
-
           <div className="or-line">또는 이메일로</div>
-
           <div className="t-wrap">
             <input className={`t-input ${loginEmail ? 'on' : ''}`} type="email" placeholder="이메일"
               value={loginEmail} onChange={e => setLoginEmail(e.target.value)} />
@@ -294,11 +240,11 @@ export default function App() {
               value={loginPw} onChange={e => setLoginPw(e.target.value)} />
           </div>
           {errMsg && <p className="err-msg">{errMsg}</p>}
-          <p className="auth-switch">계정이 없어요? <span onClick={() => go('register')}>회원가입</span></p>
+          <p className="auth-switch">계정이 없어? <span onClick={() => go('register')}>회원가입</span></p>
         </div>
         <div className="cta-wrap">
           <button className="cta" onClick={handleEmailLogin}>로그인</button>
-          <button className="cta ghost" onClick={() => go('birth')}>로그인 없이 체험</button>
+          <button className="cta ghost" onClick={() => go('occupation')}>로그인 없이 체험</button>
         </div>
       </div>
 
@@ -326,14 +272,47 @@ export default function App() {
         </div>
       </div>
 
+      {/* ★ 신분 선택 (신규) */}
+      <div className={`screen ${screen === 'occupation' ? 'active' : ''}`}>
+        <div className="status-bar"></div>
+        <NavBar onBack={() => go('login')} />
+        <ProgBar step={0} total={5} />
+        <div className="body-pad">
+          <h2 className="page-title">언니,<br/>뭐 하는 사람이야?</h2>
+          <p className="page-sub">신분에 맞는 전략을 짜줄게</p>
+          <div className="occ-grid">
+            {[
+              { label: '학생', icon: '🎓' },
+              { label: '직장인', icon: '💼' },
+              { label: '자영업자', icon: '🏪' },
+              { label: '취준생', icon: '📝' },
+              { label: '주부', icon: '🏠' },
+              { label: '프리랜서', icon: '💻' },
+            ].map(o => (
+              <button
+                key={o.label}
+                className={`occ-btn ${s.occupation === o.label ? 'on' : ''}`}
+                onClick={() => upd('occupation', o.label)}
+              >
+                <div className="occ-icon">{o.icon}</div>
+                <div className="occ-label">{o.label}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="cta-wrap">
+          <button className={`cta ${!s.occupation ? 'off' : ''}`} onClick={() => go('birth')}>다음</button>
+        </div>
+      </div>
+
       {/* 생년월일 */}
       <div className={`screen ${screen === 'birth' ? 'active' : ''}`}>
         <div className="status-bar"></div>
-        <NavBar onBack={() => go('login')} />
-        <ProgBar step={0} total={4} />
+        <NavBar onBack={() => go('occupation')} />
+        <ProgBar step={1} total={5} />
         <div className="body-pad">
-          <h2 className="page-title">생년월일을<br/>알려주세요</h2>
-          <p className="page-sub">사주 분석에 사용해요. 저장하지 않아요.</p>
+          <h2 className="page-title">생년월일을<br/>알려줘</h2>
+          <p className="page-sub">사주 분석에 사용해. 저장 안 해.</p>
           <BirthPicker s={s} upd={upd} />
           <p className="sec-label">태어난 시간</p>
           <ChipGroup
@@ -358,15 +337,11 @@ export default function App() {
       <div className={`screen ${screen === 'place' ? 'active' : ''}`}>
         <div className="status-bar"></div>
         <NavBar onBack={() => go('birth')} />
-        <ProgBar step={1} total={4} />
+        <ProgBar step={2} total={5} />
         <div className="body-pad">
-          <h2 className="page-title">오늘 어디<br/>가세요?</h2>
-          <p className="page-sub">직접 입력하거나 아래에서 골라요</p>
-          <TextInput
-            value={s.place}
-            placeholder="예) 강남역 카페, 본사 회의실…"
-            onChange={v => upd('place', v)}
-          />
+          <h2 className="page-title">오늘 어디<br/>가?</h2>
+          <p className="page-sub">직접 입력하거나 아래에서 골라</p>
+          <TextInput value={s.place} placeholder="예) 강남역 카페, 본사 회의실…" onChange={v => upd('place', v)} />
           <p className="sec-label">자주 가는 곳</p>
           <ChipGroup
             options={['회사/사무실','카페','회의실','식당','술자리','거래처','재택/집','발표장']}
@@ -383,18 +358,14 @@ export default function App() {
       <div className={`screen ${screen === 'person' ? 'active' : ''}`}>
         <div className="status-bar"></div>
         <NavBar onBack={() => go('place')} />
-        <ProgBar step={2} total={4} />
+        <ProgBar step={3} total={5} />
         <div className="body-pad">
-          <h2 className="page-title">누구<br/>만나세요?</h2>
-          <p className="page-sub">직접 입력하거나 아래에서 골라요</p>
-          <TextInput
-            value={s.person}
-            placeholder="예) 직속 팀장, 대학교 선배…"
-            onChange={v => upd('person', v)}
-          />
+          <h2 className="page-title">누구<br/>만나?</h2>
+          <p className="page-sub">직접 입력하거나 아래에서 골라</p>
+          <TextInput value={s.person} placeholder="예) 직속 팀장, 대학교 선배…" onChange={v => upd('person', v)} />
           <p className="sec-label">관계 유형</p>
           <ChipGroup
-            options={['직속 상사','임원','동료','후배','클라이언트','거래처 담당자','전 직장 관계자','학교 선배']}
+            options={['직속 상사','임원','동료','후배','클라이언트','거래처','학교 선배','소개팅 상대']}
             selected={s.person}
             onSelect={v => upd('person', v)}
           />
@@ -415,10 +386,10 @@ export default function App() {
       <div className={`screen ${screen === 'purpose' ? 'active' : ''}`}>
         <div className="status-bar"></div>
         <NavBar onBack={() => go('person')} />
-        <ProgBar step={3} total={4} />
+        <ProgBar step={4} total={5} />
         <div className="body-pad">
-          <h2 className="page-title">이 만남의<br/>목적이 뭐예요?</h2>
-          <p className="page-sub alert">꼭 골라주세요 — 조언의 핵심이에요</p>
+          <h2 className="page-title">가야 하나<br/>말아야 해?</h2>
+          <p className="page-sub alert">목적 골라줘 — 조언의 핵심이야</p>
           <ChipGroup
             options={['업무 보고/논의','탐색/네트워킹','부탁/협상','갈등/해결','그냥 친목','첫 만남']}
             selected={s.purpose}
@@ -434,7 +405,7 @@ export default function App() {
           />
         </div>
         <div className="cta-wrap">
-          <button className={`cta ${!s.purpose ? 'off' : ''}`} onClick={startAnalysis}>조언 받기</button>
+          <button className={`cta ${!s.purpose ? 'off' : ''}`} onClick={startAnalysis}>판단 받기</button>
         </div>
       </div>
 
@@ -444,8 +415,8 @@ export default function App() {
         <div style={{ padding: '20px 20px 0' }}>
           <div className="sum-card">
             {[
+              ['신분', s.occupation],
               ['생년월일', `${s.year}.${s.month}.${s.day} ${s.gender}성`],
-              ['태어난 시', s.hour],
               ['장소', s.place],
               ['만날 사람', s.person],
               ['목적', s.purpose],
@@ -459,7 +430,7 @@ export default function App() {
           <div className="spin-wrap">
             <div className="spin" />
             <p className="spin-title">사주 × 상황 분석 중</p>
-            <p className="spin-sub">잠깐만 기다려주세요</p>
+            <p className="spin-sub">사주와 상대방의 기운을 매칭 중이야...</p>
           </div>
         </div>
       </div>
@@ -467,77 +438,116 @@ export default function App() {
       {/* 결과 */}
       <div className={`screen ${screen === 'result' ? 'active' : ''}`}>
         <div className="status-bar"></div>
-        <NavBar title="오늘의 조언" onBack={goHome} />
+        <NavBar title="오늘의 판단" onBack={goHome} />
         {result && (
           <div className="body-pad" style={{ paddingTop: 0 }}>
-            {/* 오늘의 기운 한 줄 */}
+
+            {/* ★ Go/No-Go 판정 카드 */}
+            <GoNoGoCard result={result} />
+
+            {/* 에너지바 */}
             <div className="energy-bar">
-              <span className="energy-icon">🧭</span>
+              <span className="energy-icon">✨</span>
               <span className="energy-text">{result.todayEnergy}</span>
             </div>
+
+            {/* 결과 요약 */}
             <ResultCard result={result} input={s} />
-            <CheckCard checkpoints={result.checkpoints} />
-            <BanCard bans={result.bans} />
-            {/* 골든타임 */}
-            {result.goldenTime && <GoldenTimeCard gt={result.goldenTime} />}
-            {/* 행운 아이템 */}
-            {result.luckyItem && (
-              <div className="lucky-card">
-                <p className="lc-head">오늘의 행운 아이템</p>
-                <p className="lc-text">{result.luckyItem}</p>
+
+            {/* ★ 블러 잠금 — 무료 사용자 */}
+            {premium ? (
+              <>
+                <CheckCard checkpoints={result.checkpoints} />
+                <BanCard bans={result.bans} />
+                {result.goldenTime && <GoldenTimeCard gt={result.goldenTime} />}
+                {result.luckyItem && (
+                  <div className="lucky-card">
+                    <p className="lc-head">오늘의 행운 아이템</p>
+                    <p className="lc-text">{result.luckyItem}</p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="blur-section">
+                <div className="blur-overlay">
+                  <CheckCard checkpoints={result.checkpoints} />
+                  <BanCard bans={result.bans} />
+                  {result.goldenTime && <GoldenTimeCard gt={result.goldenTime} />}
+                </div>
+                <div className="blur-lock">
+                  <span className="blur-lock-icon">🔒</span>
+                  <p className="blur-lock-text">결제 후 {s.person}을 사로잡을<br/>필승 전략을 확인해!</p>
+                  <button className="blur-lock-btn" onClick={() => go('paywall')}>
+                    지금 확인하기 →
+                  </button>
+                </div>
               </div>
             )}
+
             <SajuCard saju={result.saju} />
             <PushBanner auth={auth} onToggle={togglePush} pushOn={pushEnabled} />
             <div className="act-row" style={{ marginTop: 12 }}>
-              <button className="act dark" onClick={copyResult}>복사하기</button>
-              <button className="act light" onClick={goHome}>다시 받기</button>
+              <button className="act dark" onClick={goHome}>다시 받기</button>
+              {!premium && <button className="act light" onClick={() => go('paywall')}>업그레이드</button>}
             </div>
           </div>
         )}
       </div>
 
-      {/* Paywall */}
+      {/* ★ Paywall — 결제 4종 */}
       <div className={`screen ${screen === 'paywall' ? 'active' : ''}`}>
-        <div className="status-bar"></div>
+        <div className="status-bar" style={{ background: 'var(--navy)' }} />
         <div className="pw-hero">
           <button className="pw-back" onClick={goHome}>
-            <svg width="10" height="18" viewBox="0 0 10 18" fill="none"><path d="M9 1L1 9L9 17" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            <svg width="10" height="18" viewBox="0 0 10 18" fill="none">
+              <path d="M9 1L1 9L9 17" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
           </button>
           <p className="pw-eyebrow">PREMIUM</p>
-          <h2 className="pw-title">오늘 무료 횟수를<br/>다 썼어요</h2>
-          <p className="pw-sub">프리미엄으로 업그레이드하면<br/>무제한으로 사용할 수 있어요</p>
+          <h2 className="pw-title">필승 전략 전체를<br/>확인해봐 🔮</h2>
+          <p className="pw-sub">골든타임 · 행운 아이템 · 구체적 공략법<br/>모든 게 잠금 해제돼</p>
         </div>
         <div className="pw-body">
-          {[
-            { t: '무제한 사용',       d: '하루 3회 제한 없이 언제든',               i: '∞' },
-            { t: '30일 패턴 분석',    d: '"상사 앞에서 항상 방어적이에요" 인사이트', i: '📊' },
-            { t: '사주 궁합 분석',    d: '상대방 사주와 오늘 상황 교차 분석',        i: '🔮' },
-            { t: '광고 없음',         d: '깔끔하게 조언만',                          i: '✨' },
-          ].map(f => (
-            <div key={f.t} className="pw-feat">
-              <span className="pw-feat-ic">{f.i}</span>
-              <div>
-                <p className="pw-feat-t">{f.t}</p>
-                <p className="pw-feat-d">{f.d}</p>
+          <div className="plan-cards">
+            {PLANS.map(plan => (
+              <div
+                key={plan.id}
+                className={`plan-card ${selectedPlan === plan.id ? 'selected' : ''} ${plan.id === 'month' ? 'best' : ''}`}
+                onClick={() => setSelectedPlan(plan.id)}
+              >
+                {plan.id === 'month' && <span className="plan-badge-tag">★ Best</span>}
+                {plan.id === 'lifetime' && <span className="plan-badge-tag">런칭 한정</span>}
+                <div className="plan-card-radio" />
+                <div className="plan-card-info">
+                  <p className="plan-card-name">{plan.name}</p>
+                  <p className="plan-card-desc">{plan.desc}</p>
+                </div>
+                <div className="plan-card-price-wrap">
+                  {plan.origPrice && <p className="plan-card-orig">{plan.origPrice}</p>}
+                  <p className="plan-card-price">{plan.price}</p>
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
         <div className="cta-wrap">
-          <button className="cta" onClick={handlePurchase}>월 2,900원으로 시작하기</button>
+          <button className="pw-cta-btn" onClick={handlePurchase}>
+            {PLANS.find(p => p.id === selectedPlan)?.name} 시작하기
+          </button>
           <p className="pw-fine">언제든 해지 가능 · VAT 포함 · 자동 갱신</p>
         </div>
       </div>
 
       {/* 30일 패턴 */}
       <div className={`screen ${screen === 'pattern' ? 'active' : ''}`}>
-        <div className="status-bar" style={{ background: 'var(--blue)' }}></div>
+        <div className="status-bar" style={{ background: 'var(--navy)' }}></div>
         <div className="pt-hero">
           <button className="pw-back" onClick={() => go('my')}>
-            <svg width="10" height="18" viewBox="0 0 10 18" fill="none"><path d="M9 1L1 9L9 17" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            <svg width="10" height="18" viewBox="0 0 10 18" fill="none">
+              <path d="M9 1L1 9L9 17" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
           </button>
-          <p className="pw-eyebrow">30일 패턴 분석</p>
+          <p className="pw-eyebrow" style={{ color: 'var(--gold)' }}>30일 패턴 분석</p>
           <p className="pt-insight">{patternData?.insight || '데이터 분석 중…'}</p>
         </div>
         {patternData && (
@@ -559,31 +569,25 @@ export default function App() {
 
       {/* 마이페이지 */}
       <div className={`screen ${screen === 'my' ? 'active' : ''}`}>
-        <div className="status-bar" style={{ background: 'var(--g900)' }} />
+        <div className="status-bar" style={{ background: 'var(--navy)' }} />
         <div className="my-top">
-          <div className="my-avatar">
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-              <circle cx="14" cy="10" r="5" stroke="rgba(255,255,255,.7)" strokeWidth="1.5"/>
-              <path d="M4 26c0-5.523 4.477-10 10-10s10 4.477 10 10"
-                stroke="rgba(255,255,255,.7)" strokeWidth="1.5" strokeLinecap="round"/>
-            </svg>
-          </div>
-          <p className="my-name">{auth?.user.nickname || '—'}</p>
-          <p className="my-email">{auth?.user.email || '—'}</p>
+          <div className="my-avatar">✨</div>
+          <p className="my-name">{auth?.user.nickname || '이순간 유저'}</p>
+          <p className="my-email">{auth?.user.email || '게스트 모드'}</p>
         </div>
         <div className="my-body">
-          {/* 플랜 상태 */}
-          <div className={`plan-badge ${planInfo.plan === 'premium' ? 'premium' : ''}`}>
-            {planInfo.plan === 'premium'
+          <div className={`plan-badge ${premium ? 'premium' : ''}`}>
+            {premium
               ? <><span className="pb-icon">✨</span><span>프리미엄 구독 중</span></>
               : <><span className="pb-icon">🆓</span><span>무료 · 오늘 {remainingFree(planInfo)}회 남음</span><a onClick={() => go('paywall')}>업그레이드</a></>
             }
           </div>
-          {/* 패턴 분석 버튼 (프리미엄만) */}
-          {planInfo.plan === 'premium' && (
+          {premium && (
             <button className="pattern-btn" onClick={() => { loadPatternData(); go('pattern'); }}>
               <span>📊 30일 패턴 분석 보기</span>
-              <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1l6 6-6 6" stroke="var(--blue)" strokeWidth="2" strokeLinecap="round"/></svg>
+              <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
+                <path d="M1 1l6 6-6 6" stroke="var(--gold)" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
             </button>
           )}
           <p className="my-label">최근 조언 기록</p>
@@ -606,26 +610,24 @@ export default function App() {
       </div>
 
       {/* 하단 탭 */}
-      {auth && (
-        <div className="tab-bar">
-          <button className={`tab-item ${screen !== 'my' ? 'on' : ''}`} onClick={goHome}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8"/>
-              <circle cx="12" cy="12" r="2" fill="currentColor"/>
-              <path d="M12 5.5v3M12 15.5v3M5.5 12h3M15.5 12h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-            </svg>
-            <span>조언</span>
-          </button>
-          <button className={`tab-item ${screen === 'my' ? 'on' : ''}`}
-            onClick={() => { loadHistory(); go('my'); }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.8"/>
-              <path d="M4 20c0-4.418 3.582-8 8-8s8 3.582 8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-            </svg>
-            <span>내 정보</span>
-          </button>
-        </div>
-      )}
+      <div className="tab-bar">
+        <button className={`tab-item ${screen !== 'my' ? 'on' : ''}`} onClick={goHome}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8"/>
+            <circle cx="12" cy="12" r="2" fill="currentColor"/>
+            <path d="M12 5.5v3M12 15.5v3M5.5 12h3M15.5 12h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+          </svg>
+          <span>이순간</span>
+        </button>
+        <button className={`tab-item ${screen === 'my' ? 'on' : ''}`}
+          onClick={() => { loadHistory(); go('my'); }}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.8"/>
+            <path d="M4 20c0-4.418 3.582-8 8-8s8 3.582 8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+          </svg>
+          <span>내 정보</span>
+        </button>
+      </div>
 
       {/* 토스트 */}
       <div className={`toast ${toast ? 'show' : ''}`}>{toast}</div>
@@ -633,9 +635,8 @@ export default function App() {
   );
 }
 
-// ──────────────────────────────────────────────
-// 서브 컴포넌트
-// ──────────────────────────────────────────────
+// ── 서브 컴포넌트 ──
+
 function Clock() {
   const [time, setTime] = useState(() => {
     const d = new Date(); return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -681,15 +682,10 @@ function TextInput({ value, placeholder, onChange }: {
     <div className="t-wrap">
       <input
         className={`t-input ${value ? 'on' : ''}`}
-        type="text"
-        placeholder={placeholder}
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        autoComplete="off"
+        type="text" placeholder={placeholder} value={value}
+        onChange={e => onChange(e.target.value)} autoComplete="off"
       />
-      {value && (
-        <button className="t-del" onClick={() => onChange('')}>✕</button>
-      )}
+      {value && <button className="t-del" onClick={() => onChange('')}>✕</button>}
     </div>
   );
 }
@@ -703,11 +699,8 @@ function ChipGroup({ options, values, selected, onSelect, large }: {
       {options.map((opt, i) => {
         const val = values ? values[i] : opt;
         return (
-          <button
-            key={opt}
-            className={`chip ${large ? 'lg' : ''} ${selected === val ? 'on' : ''}`}
-            onClick={() => onSelect(val)}
-          >{opt}</button>
+          <button key={opt} className={`chip ${large ? 'lg' : ''} ${selected === val ? 'on' : ''}`}
+            onClick={() => onSelect(val)}>{opt}</button>
         );
       })}
     </div>
@@ -715,9 +708,9 @@ function ChipGroup({ options, values, selected, onSelect, large }: {
 }
 
 function BirthPicker({ s, upd }: { s: InputState; upd: (k: keyof InputState, v: string) => void }) {
-  const years = Array.from({ length: new Date().getFullYear() - 1929 }, (_, i) => new Date().getFullYear() - 10 - i);
+  const years  = Array.from({ length: new Date().getFullYear() - 1929 }, (_, i) => new Date().getFullYear() - 10 - i);
   const months = Array.from({ length: 12 }, (_, i) => i + 1);
-  const days = Array.from({ length: 31 }, (_, i) => i + 1);
+  const days   = Array.from({ length: 31 }, (_, i) => i + 1);
   return (
     <div className="date-row">
       <select className="date-pick" value={s.year} onChange={e => upd('year', e.target.value)}>
@@ -736,20 +729,33 @@ function BirthPicker({ s, upd }: { s: InputState; upd: (k: keyof InputState, v: 
   );
 }
 
-function ResultCard({ result, input }: { result: AdviceResult; input: InputState }) {
-  const tc = result.tension === '높음' ? '#FF9500' : result.tension === '낮음' ? '#6ee7b7' : '#93c5fd';
-  const ac = result.advantage === '유리' ? '#6ee7b7' : result.advantage === '불리' ? '#fca5a5' : '#9ca3af';
+function GoNoGoCard({ result }: { result: AdviceResult }) {
+  const map = {
+    go:          { verdict: '가도 좋아! ✓',           label: 'GO',          class: 'go' },
+    conditional: { verdict: '가되, 조심해야 해 △',    label: '조건부 GO',   class: 'conditional' },
+    nogo:        { verdict: '안 가도 돼요 ✕',         label: 'NO GO',       class: 'nogo' },
+  };
+  const m = map[result.goNoGo] || map['conditional'];
+  return (
+    <div className={`gng-card ${m.class}`}>
+      <p className="gng-label">{m.label}</p>
+      <p className="gng-verdict">{m.verdict}</p>
+      <p className="gng-reason">{result.goNoGoReason}</p>
+    </div>
+  );
+}
 
-  // 긴장도에 따른 배경색 변화
+function ResultCard({ result, input }: { result: AdviceResult; input: InputState }) {
   const heroBg = result.tension === '높음'
     ? 'linear-gradient(148deg, #1a0d0d 0%, #2d1515 50%, #1a0a0a 100%)'
     : result.tension === '낮음'
     ? 'linear-gradient(148deg, #0d1a12 0%, #152d1f 50%, #0a1a10 100%)'
-    : 'linear-gradient(148deg, #0d1c2e 0%, #1b3154 50%, #0a1e3c 100%)';
-
+    : 'linear-gradient(148deg, #1a1a2e 0%, #2d2d4a 50%, #1a1a2e 100%)';
+  const tc = result.tension === '높음' ? '#FF9500' : result.tension === '낮음' ? '#6ee7b7' : '#D4A373';
+  const ac = result.advantage === '유리' ? '#6ee7b7' : result.advantage === '불리' ? '#fca5a5' : '#9ca3af';
   return (
     <div className="res-hero" style={{ background: heroBg }}>
-      <p className="rh-meta">{today()} · {input.year}년생 {input.gender}성 · 사주 기반</p>
+      <p className="rh-meta">{today()} · {input.year}년생 {input.gender}성 · {input.occupation} · 사주 기반</p>
       <div className="rh-tags">
         <span className="rh-tag hl">{result.saju.ilgan}</span>
         {result.tags.map(t => <span key={t} className="rh-tag">{t}</span>)}
@@ -806,15 +812,14 @@ function BanCard({ bans }: { bans: string[] }) {
 }
 
 function GoldenTimeCard({ gt }: { gt: { morning: string; afternoon: string; evening: string } }) {
-  const slots = [
-    { label: '오전', value: gt.morning,   icon: '🌅' },
-    { label: '오후', value: gt.afternoon, icon: '☀️' },
-    { label: '저녁', value: gt.evening,   icon: '🌙' },
-  ];
   return (
     <div className="info-card" style={{ marginBottom: 10 }}>
-      <p className="ic-head">시간대별 골든타임</p>
-      {slots.map(s => (
+      <p className="ic-head">시간대별 골든타임 ⏰</p>
+      {[
+        { label: '오전', value: gt.morning,   icon: '🌅' },
+        { label: '오후', value: gt.afternoon, icon: '☀️' },
+        { label: '저녁', value: gt.evening,   icon: '🌙' },
+      ].map(s => (
         <div key={s.label} className="gt-row">
           <span className="gt-icon">{s.icon}</span>
           <div>
@@ -849,32 +854,19 @@ function PushBanner({ auth, onToggle, pushOn }: {
   if (pushOn) return (
     <div className="push-banner on">
       <div>
-        <p className="pb-title">매일 아침 알림 켜짐</p>
-        <p className="pb-sub">9시에 "오늘 일정 입력해봐" 알림이 와요</p>
+        <p className="pb-title">매일 아침 알림 켜짐 ✓</p>
+        <p className="pb-sub">9시에 오늘 일정 입력하라고 알려줄게요</p>
       </div>
       <button className="pb-toggle on" onClick={onToggle}>끄기</button>
     </div>
   );
-
   return (
     <div className="push-banner">
       <div>
         <p className="pb-title">매일 아침 알림 받기</p>
         <p className="pb-sub">오전 9시 · 오늘 조언 챙기는 습관</p>
       </div>
-      <button className="pb-toggle" onClick={onToggle}>
-        {auth ? '켜기' : '로그인 후 설정'}
-      </button>
+      <button className="pb-toggle" onClick={onToggle}>{auth ? '켜기' : '로그인 후 설정'}</button>
     </div>
   );
-}
-
-function FeatIcon({ i }: { i: number }) {
-  const icons = [
-    <svg key={0} width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="8" r="4" stroke="var(--g600)" strokeWidth="1.5"/><path d="M3 18c0-3.314 3.134-6 7-6s7 2.686 7 6" stroke="var(--g600)" strokeWidth="1.5" strokeLinecap="round"/></svg>,
-    <svg key={1} width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2.5L12.5 8.5H18L13.5 12L15.5 18L10 14.5L4.5 18L6.5 12L2 8.5H7.5L10 2.5Z" stroke="var(--g600)" strokeWidth="1.5" strokeLinejoin="round"/></svg>,
-    <svg key={2} width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="4" width="14" height="13" rx="2" stroke="var(--g600)" strokeWidth="1.5"/><path d="M7 2v4M13 2v4M3 9h14" stroke="var(--g600)" strokeWidth="1.5" strokeLinecap="round"/></svg>,
-    <svg key={3} width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="var(--g600)" strokeWidth="1.5"/><path d="M10 6.5v4l2.5 2.5" stroke="var(--g600)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>,
-  ];
-  return icons[i];
 }

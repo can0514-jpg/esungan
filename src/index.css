@@ -7,21 +7,32 @@
 }
 
 :root {
-  --blue:    #3182F6;
-  --blue-bg: #EBF3FF;
-  --green:   #05C072;
-  --red:     #F04452;
-  --yellow:  #FF9500;
-  --g50:  #F9FAFB;
-  --g100: #F2F4F6;
-  --g200: #E5E8EB;
-  --g300: #D1D6DB;
-  --g400: #B0B8C1;
-  --g500: #8B95A1;
-  --g600: #6B7684;
-  --g700: #4E5968;
-  --g800: #333D4B;
-  --g900: #191F28;
+  /* ── 이순간 브랜드 팔레트 ── */
+  --cream:       #FDF6F0;
+  --cream-dark:  #F5ECE2;
+  --gold:        #D4A373;
+  --gold-light:  #F0DCC4;
+  --gold-dark:   #B8855A;
+  --lavender:    #E0D4FF;
+  --lavender-dark: #C4B3F7;
+  --navy:        #1A1A2E;
+  --navy-soft:   #2D2D4A;
+
+  /* ── 그레이스케일 (이순간 조정) ── */
+  --g50:  #FAF7F4;
+  --g100: #F0EBE4;
+  --g200: #E2D9D0;
+  --g300: #C8BEB4;
+  --g400: #A89E94;
+  --g500: #857C72;
+  --g600: #635D56;
+  --g700: #4A4540;
+  --g800: #2E2B26;
+  --g900: #1A1A2E;
+
+  /* ── 상태 색상 ── */
+  --red:   #F04452;
+  --green: #05C072;
 }
 
 html, body, #root {
@@ -29,8 +40,8 @@ html, body, #root {
   font-family: 'Noto Sans KR', -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
-  background: #fff;
-  color: var(--g900);
+  background: var(--cream);
+  color: var(--navy);
   overflow: hidden;
 }
 

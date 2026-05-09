@@ -2,6 +2,7 @@ export type Screen =
   | 'onboard'
   | 'login'
   | 'register'
+  | 'occupation'
   | 'birth'
   | 'place'
   | 'person'
@@ -12,7 +13,7 @@ export type Screen =
   | 'paywall'
   | 'pattern';
 
-export type PlanType = 'free' | 'premium';
+export type PlanType = 'free' | 'day' | 'month' | 'year' | 'lifetime';
 
 export interface UserPlan {
   plan: PlanType;
@@ -23,6 +24,7 @@ export interface UserPlan {
 export const FREE_DAILY_LIMIT = 3;
 
 export interface InputState {
+  occupation: string;
   year: string;
   month: string;
   day: string;
@@ -36,6 +38,7 @@ export interface InputState {
 }
 
 export const defaultInput: InputState = {
+  occupation: '',
   year: '',
   month: '',
   day: '',
@@ -55,8 +58,12 @@ export interface SajuProfile {
   weakness: string;
 }
 
+export type GoNoGo = 'go' | 'conditional' | 'nogo';
+
 export interface AdviceResult {
   saju: SajuProfile;
+  goNoGo: GoNoGo;
+  goNoGoReason: string;
   situation: string;
   insight: string;
   tension: string;
